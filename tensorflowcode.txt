@@ -1,0 +1,89 @@
+import tensorflow as tf
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow_model_optimization.sparsity import keras as sparsity
+import matplotlib.pyplot as plt
+
+# Define data directories and parameters
+train_data_dir = '/content/drive/MyDrive/train'
+validation_data_dir = '/content/drive/MyDrive/test'
+img_width, img_height = 224, 224  # Dimensions to which the images will be resized
+batch_size = 128
+num_classes = 2  # number of output classes
+
+# Instantiate data generators
+train_datagen = ImageDataGenerator(rescale=1./255)
+validation_datagen = ImageDataGenerator(rescale=1./255)
+
+# Prepare data generators
+train_generator = train_datagen.flow_from_directory(
+    train_data_dir,
+    target_size=(img_width, img_height),
+    batch_size=batch_size,
+    class_mode='categorical')
+
+validation_generator = validation_datagen.flow_from_directory(
+    validation_data_dir,
+    target_size=(img_width, img_height),
+    batch_size=batch_size,
+    class_mode='categorical')
+
+# Load the ResNet50 model
+base_model = ResNet50(weights='imagenet', include_top=False, input_shape=(img_width, img_height, 3))
+
+# Add custom classification layers
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(512, activation='relu')(x)
+predictions = Dense(num_classes, activation='softmax')(x)
+
+# Create the final model
+model = Model(inputs=base_model.input, outputs=predictions)
+
+# Compile the model
+model.compile(optimizer=Adam(learning_rate=0.0001), loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Define pruning configuration
+pruning_params = {
+    'pruning_schedule': sparsity.PolynomialDecay(initial_sparsity=0.0, final_sparsity=0.5, begin_step=2000, end_step=10000)
+}
+
+# Apply pruning to the model
+pruned_model = sparsity.prune_low_magnitude(model, **pruning_params)
+
+# Compile the pruned model
+pruned_model.compile(optimizer=Adam(learning_rate=0.0001), loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Add pruning callback
+callbacks = [sparsity.UpdatePruningStep()]
+
+# Train the pruned model
+history = pruned_model.fit(train_generator,
+                           epochs=2,
+                           validation_data=validation_generator,
+                           callbacks=callbacks)
+
+# Evaluate the pruned model
+score = pruned_model.evaluate(validation_generator, verbose=1)
+print('Test loss:', score[0])
+print('Test accuracy:', score[1])
+
+# Plot the training history
+plt.plot(history.history['accuracy'])
+plt.plot(history.history['val_accuracy'])
+plt.title('Model accuracy')
+plt.ylabel('Accuracy')
+plt.xlabel('Epoch')
+plt.legend(['Train', 'Test'], loc='upper left')
+plt.show()
+
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('Model loss')
+plt.ylabel('Loss')
+plt.xlabel('Epoch')
+plt.legend(['Train', 'Test'], loc='upper right')
+plt.show()

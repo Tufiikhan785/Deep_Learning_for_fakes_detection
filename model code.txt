@@ -1,0 +1,129 @@
+import cv2
+import numpy as np
+from sklearn.metrics import confusion_matrix
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.models import load_model
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.utils import to_categorical
+import os
+import sys
+
+# Load the Image Dataset of Normal and Malignant WBC
+dataset_directory = '/content/drive/MyDrive/Dataset (1)'
+
+# Split the dataset into training and validation sets
+train_directory = os.path.join(dataset_directory, 'train')
+validation_directory = os.path.join(dataset_directory, 'validation')
+
+X_train, X_val, Y_train, Y_val = train_test_split(
+    os.listdir(train_directory),
+    os.listdir(validation_directory),
+    test_size=0.3,
+    random_state=42
+)
+
+# Create ImageDataGenerator objects for training and validation data
+image_size = (299, 299)
+batch_size = 32
+
+train_datagen = ImageDataGenerator(rescale=1.0 / 255.0)
+train_generator = train_datagen.flow_from_directory(
+    train_directory,
+    target_size=image_size,
+    batch_size=batch_size,
+    class_mode='binary',
+    shuffle=True
+)
+
+val_datagen = ImageDataGenerator(rescale=1.0 / 255.0)
+val_generator = val_datagen.flow_from_directory(
+    validation_directory,
+    target_size=image_size,
+    batch_size=batch_size,
+    class_mode='binary',
+    shuffle=False
+)
+
+# Load the Transfer Learning CNN Model
+netTransfer = load_model('myCNN2.h5')
+
+# Select the Test images and save in Y_test
+Y_test = val_generator.classes
+
+# CNN model validation
+YPred = np.argmax(netTransfer.predict(val_generator), axis=1)
+
+# Performance evaluation of Deep Learning Trained Model
+# Confusion matrix
+confusion = confusion_matrix(Y_test, YPred)
+
+# Precision, Recall, and F1 Score
+precision = np.diag(confusion) / np.sum(confusion, axis=0)
+recall = np.diag(confusion) / np.sum(confusion, axis=1)
+meanPrecision = np.mean(precision)
+meanRecall = np.mean(recall)
+
+# MCC
+mcc = (confusion[0, 0] * confusion[1, 1] - confusion[0, 1] * confusion[1, 0]) / \
+      np.sqrt((confusion[0, 0] + confusion[0, 1]) * (confusion[0, 0] + confusion[1, 0]) *
+              (confusion[1, 1] + confusion[0, 1]) * (confusion[1, 1] + confusion[1, 0]))
+
+# RMSE
+YPred_one_hot = to_categorical(YPred)
+Y_test_one_hot = to_categorical(Y_test)
+rmse = np.sqrt(np.mean(np.square(YPred_one_hot - Y_test_one_hot)))
+
+# Display metrics
+print('Precision: {:.3f}'.format(meanPrecision))
+print('Recall: {:.3f}'.format(meanRecall))
+print('MCC: {:.3f}'.format(mcc))
+print('RMSE: {:.3f}'.format(rmse))
+
+inputVideo = 'Realnew.mp4'
+
+# Check to make sure that file actually exists. Warn user if it doesn't.
+if not os.path.isfile(inputVideo):
+    print('Error: The following file does not exist: {}'.format(inputVideo))
+    sys.exit(1)
+
+# Create a VideoCapture object
+videoReader = cv2.VideoCapture(inputVideo)
+
+# Create a VideoWriter object
+fps = videoReader.get(cv2.CAP_PROP_FPS)
+width = int(videoReader.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(videoReader.get(cv2.CAP_PROP_FRAME_HEIGHT))
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+outputVideo = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
+
+while True:
+    ret, frame = videoReader.read()
+
+    if not ret:
+        break
+
+    frame2 = cv2.resize(frame, (299, 299))
+    frame2 = frame2 / 255.0  # Normalize the frame
+
+    # Classify the frame
+    label = np.argmax(netTransfer.predict(np.expand_dims(frame2, axis=0)), axis=1)
+    label = str(label[0])  # Convert label to string
+
+    # Write the label on the frame
+    position = (10, 10)  # Position of the label
+    cv2.putText(frame, label, position, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+    # Display the frame
+    cv2.imshow('Frame', frame)
+    outputVideo.write(frame)
+
+    # Break the loop if 'q' is pressed
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release the video reader and writer
+videoReader.release()
+outputVideo.release()
+
+# Close all windows
+cv2.destroyAllWindows()
